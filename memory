@@ -1,0 +1,312 @@
+#!/bin/bash
+
+################################################################
+
+
+HELP_MESSAGE() {
+printf "\n%5s%s\n\n" "" "## Display memory usage information for all processes"
+printf "%5s%s\n\n" "" "${0}"
+printf "%5s%s\n" "" "## Sort memory usage information by a column"
+printf "%5s%s\n\n" "" "## Pid -> pr, Swapped -> sw, Unique -> u, Shared -> s, Rss -> r, Pss -> p"
+printf "%5s%s\n\n" "" "${0} sort=u"
+printf "%5s%s\n" "" "## By default the script display only first 30 characters of a command"
+printf "%5s%s\n\n" "" "## To display whole command use cmdfull argument"
+printf "%5s%s\n\n" "" "${0} cmdfull"
+printf "%5s%s\n\n" "" "## Display memory usage information for a specific process, eg with pid 123"
+printf "%5s%s\n\n" "" "${0} pid=123"
+printf "%5s%s\n\n" "" "## Update memory usage information every 10 seconds for the pid 123"
+printf "%5s%s\n\n" "" "${0} pid=123 watch=10"
+
+printf "%5s%s\n" "" "## Reference Doc : What's the meaning of each field in /proc/[pid]/smaps?"
+printf "%5s%s\n\n" "" "## Reference Url : https://access.redhat.com/solutions/23894"
+printf "%5s%s\n" "" "Unique = Private_Clean + Private_Dirty"
+printf "%5s%s\n" "" "Shared = Shared_Clean + Shared_Dirty"
+printf "%5s%s\n" "" "Rss(Resident set size) = Unique[Private_Clean + Private_Dirty] + Shared[Shared_Clean + Shared_Dirty]"
+printf "%5s%s\n\n" "" "Pss(Proportional set size) = Unique(Private_Clean + Private_Dirty) + Shared/\"Number of processes sharing the same memory\""
+exit
+}
+
+## ================
+## Script's arguments
+## ================
+
+RAISE_ERROR () {
+printf "\n%5s%s\n\n" "" "${1} Terminated."
+exit
+}
+
+UNKNOWN_OPTIONS_DETECTED() {
+
+ printf "\n%5s%s\n\n" "" "Unknown option(s) detected. Terminated."
+
+  for value in "${NOT_SUPPORTED_OPTIONS[@]}";
+  do
+    printf "%7s%s\n" "" "${value}"
+  done
+
+  printf "\n"
+  exit
+}
+
+username=$(id -un)
+ARRAY_OF_SCRIPT_OPTIONS=("$@")
+
+## Parsing specified options
+for option in "${ARRAY_OF_SCRIPT_OPTIONS[@]}";
+do
+  ## Convert a option from lowercase to uppercase
+  case $(echo ${option} | tr '[:lower:]' '[:upper:]') in
+       SORT=* )   SORT=$(echo ${option} | sed 's/[a-zA-Z]*=//g') ;;
+       SORT )     RAISE_ERROR "Unsupported option detected: sort. Did you mean the sort=." ;;
+       CMDFULL )  CMD_FULL_OUTPUT="TRUE" ;;
+       FULLCMD )  CMD_FULL_OUTPUT="TRUE" ;;
+       PID=* )    PID=$(echo ${option} | sed 's/[a-zA-Z]*=//g') ;;
+       WATCH=* )  WATCH=$(echo ${option} | sed 's/[a-zA-Z]*=//g') ;;
+       HELP )     HELP_MESSAGE ;;
+       * )        NOT_SUPPORTED_OPTIONS=("${NOT_SUPPORTED_OPTIONS[@]}" "${option}") ;;
+  esac
+done
+
+## Print all unknown options
+if [[ ! -z "${NOT_SUPPORTED_OPTIONS[@]}" ]];
+then
+  UNKNOWN_OPTIONS_DETECTED
+fi
+
+## Sort and Pid options can't be specified together
+if [[ ! -z "${SORT}" ]] && [[ ! -z "${PID}" ]] || [[ ! -z "${SORT}" ]] && [[ ! -z "${WATCH}" ]];
+then
+  RAISE_ERROR "it's not allowed to specify pid/watch and sort options together."
+  exit
+fi
+
+## For sort argument the following options are permited only : pr -> Process, sw -> Swapped, u -> Unique, s -> Shared, r -> Rss, p -> Pss
+if [[ -z "${SORT}" ]];
+then
+   # Set default - Order by Processes
+   SORT=PR
+else
+   case $(echo "${SORT}" | tr '[:lower:]' '[:upper:]') in
+         PR ) : ;;
+         SW ) : ;;
+         U )  : ;;
+         S )  : ;;
+         R )  : ;;
+         P )  : ;;
+         * )  RAISE_ERROR "Unsupporeted option for sort parameter detected: sort=${SORT}." ;;
+   esac
+fi
+
+## For PID parameter only numbers are allowed
+if [[ ! -z "${PID}" ]] && [[ ! "${PID}" =~ ^[0-9]+$ ]];
+then
+  RAISE_ERROR "The pid parameter must be a number. You specified the pid=${PID}."
+fi
+
+## For WATCH parameter only numbers are allowed
+if [[ ! -z "${WATCH}" ]] && [[ ! "${PID}" =~ ^[0-9]+$ ]];
+then
+  RAISE_ERROR "The watch parameter must be a number. You specified the watch=${PID}."
+fi
+
+
+
+## ================
+## Array of related /proc/[pid]/smaps files
+## ================
+GENERATE_SMAPS_ARRAY () {
+
+if [[ "${username}" = "root" ]];
+then
+  smaps_array=($(ls -d /proc/[0-9]*/smaps))
+else
+  smaps_array=($(find /proc/[0-9]*/smaps -user "${username}"))
+fi
+}
+
+
+## ================
+## Print table header
+## ================
+
+HORIZONTAL_LINE () {
+column="------------"
+## Pid Username Swapped Unique Shared Rss Pss Command
+printf "%12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%10s\n" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}"
+}
+
+TABLE_HEADER () {
+HORIZONTAL_LINE
+## Pid Username Swapped Unique Shared Rss Pss Command
+printf "%12s%3s%-12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%10s\n" \
+"Process"    "" \
+"Username"   "" \
+"Swapped(Mb)"   "" \
+"Unique(Mb)" "" \
+"Shared(Mb)" "" \
+"Rss(Mb)"    "" \
+"Pss(Mb)" "" \
+"Command"
+HORIZONTAL_LINE
+}
+
+HORIZONTAL_LINE_PID () {
+column="------------"
+## Pid Username Swapped Unique Shared Rss Pss Command
+printf "%-20s%3s%12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%10s\n" \
+"--------------------" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}" "" \
+"${column}"
+}
+
+TABLE_HEADER_PID () {
+HORIZONTAL_LINE_PID
+## Pid Username Swapped Unique Shared Rss Pss Command
+printf "%-20s%3s%12s%3s%-12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%12s%3s%10s\n" \
+"Date"     "" \
+"Process"    "" \
+"Username"   "" \
+"Swapped(Mb)"   "" \
+"Unique(Mb)" "" \
+"Shared(Mb)" "" \
+"Rss(Mb)"    "" \
+"Pss(Mb)" "" \
+"Command"
+HORIZONTAL_LINE_PID
+}
+
+## ================
+## Get memory usage information for each process in smaps_array
+## ================
+MEMORY_USAGE_BY_PROCESSES () {
+
+for process in "${smaps_array[@]}";
+do
+    ## Move forward if process is still alive. A process might be completed right after the script is run.
+    if [[ -f "${process}" ]];
+    then
+      ## When there is no the Rss entry in a smaps file it means a process is not using memory at all.
+      if [[ ! -z "$(egrep ^Rss ${process})" ]];
+        then
+          pid=$(echo $process | awk -F/ '{print $3}')
+          if [[ ! -z "${CMD_FULL_OUTPUT}" ]];
+          then
+            pid_command="ps -p ${pid} -o command="
+          else
+            pid_command="ps -p ${pid} -o command= | head -c 30"
+          fi
+
+          printf "%12s%3s%-12s%3s%12.1f%3s%12.1f%3s%12.1f%3s%12.1f%3s%12.1f%3s%s\n" \
+	      "${pid}" "" \
+          $(stat -c '%U' $process) "" \
+	      $(egrep "^Swap:" $process | awk '{SWAPPED+=$2} END{print SWAPPED/1024}') "" \
+	      $(egrep "^Private_Clean|^Private_Dirty" $process | awk '{UNIQUE+=$2} END{print UNIQUE/1024}') "" \
+	      $(egrep "^Shared_Clean|^Shared_Dirty" $process | awk '{SHARED+=$2} END{print SHARED/1024}') "" \
+	      $(egrep ^Rss $process | awk '{RSS+=$2} END{print RSS/1024}') "" \
+	      $(egrep ^Pss $process | awk '{PSS+=$2} END{print PSS/1024}') "" \
+          "$(eval ${pid_command})"
+	  fi
+    fi
+done
+}
+
+TOTAL_MEMORY_USAGE_BY_COLUMNS () {
+HORIZONTAL_LINE
+printf "${MEMORY_USAGE_TABLE}\n" | awk '{SWAPPED_TOTAL+=$3;UNIQUE_TOTAL+=$4;SHARED_TOTAL+=$5;RSS_TOTAL+=$6;PSS_TOTAL+=$7} END{printf "%12s%3s%-12s%3s%12.1f%3s%12.1f%3s%12.1f%3s%12.1f%3s%12.1f%3s%10s\n\n","Total",null,null,null,SWAPPED_TOTAL,null,UNIQUE_TOTAL,null,SHARED_TOTAL,null,RSS_TOTAL,null,PSS_TOTAL,null,null,null}'
+}
+
+MEMORY_USAGE_BY_PID () {
+
+## Try to read a file
+cat /proc/${PID}/smaps 2>/dev/null 1>/dev/null
+if [[ "${?}" -ne 0 ]];
+then
+  if [[ "${username}" != "root" ]];
+  then
+    RAISE_ERROR "The procces with PID ${PID} does not exist or the process is not owned by you. Try to execute the script as root user."
+  else
+    RAISE_ERROR "The procces with PID ${PID} does not exist."
+  fi
+else
+  now=$(date +'%d %b %Y %T')
+  if [[ ! -z "${CMD_FULL_OUTPUT}" ]];
+    then
+      pid_command="ps -p ${PID} -o command="
+    else
+      pid_command="ps -p ${PID} -o command= | head -c 30"
+  fi
+
+  printf "%20s%3s%12s%3s%-12s%3s%12.1f%3s%12.1f%3s%12.1f%3s%12.1f%3s%12.1f%3s%s\n" \
+  "${now}" "" \
+  "${PID}" "" \
+  $(stat -c '%U' /proc/${PID}/smaps) "" \
+  $(egrep "^Swap:" /proc/${PID}/smaps | awk '{SWAPPED+=$2} END{print SWAPPED/1024}') "" \
+  $(egrep "^Private_Clean|^Private_Dirty" /proc/${PID}/smaps | awk '{UNIQUE+=$2} END{print UNIQUE/1024}') "" \
+  $(egrep "^Shared_Clean|^Shared_Dirty" /proc/${PID}/smaps | awk '{SHARED+=$2} END{print SHARED/1024}') "" \
+  $(egrep ^Rss /proc/${PID}/smaps | awk '{RSS+=$2} END{print RSS/1024}') "" \
+  $(egrep ^Pss /proc/${PID}/smaps | awk '{PSS+=$2} END{print PSS/1024}') "" \
+  "$(eval ${pid_command})"
+fi
+}
+
+
+## ================
+## calling
+## ================
+
+## To display memory usage details for all processes
+if [[ -z "${PID}" ]];
+then
+  GENERATE_SMAPS_ARRAY
+
+  if [[ "${username}" != "root" ]];
+  then
+    printf "\n  You are not the root user. Displaying memory usage details only for ${username} user processes.\n\n"
+  fi
+
+  TABLE_HEADER
+
+  MEMORY_USAGE_TABLE=$(MEMORY_USAGE_BY_PROCESSES)
+  case $(echo "${SORT}" | tr '[:lower:]' '[:upper:]') in
+       PR ) printf "${MEMORY_USAGE_TABLE}\n" | sort -k1 -n ;;
+       SW ) printf "${MEMORY_USAGE_TABLE}\n" | sort -k3 -n ;;
+       U )  printf "${MEMORY_USAGE_TABLE}\n" | sort -k4 -n ;;
+       S )  printf "${MEMORY_USAGE_TABLE}\n" | sort -k5 -n ;;
+       R )  printf "${MEMORY_USAGE_TABLE}\n" | sort -k6 -n ;;
+       P )  printf "${MEMORY_USAGE_TABLE}\n" | sort -k7 -n ;;
+  esac
+
+  TOTAL_MEMORY_USAGE_BY_COLUMNS
+
+
+  printf "\n---------\n free -m \n---------\n$(free -m)\n\n"
+else
+  TABLE_HEADER_PID
+  ## Watch parameter was specified
+  if [[ ! -z "${WATCH}" ]];
+  then
+    while true; do MEMORY_USAGE_BY_PID; sleep ${WATCH}; done
+  else
+    MEMORY_USAGE_BY_PID
+  fi
+  printf "\n"
+fi
+
+################################################################
+##./memu.sh sort=u
+## memu.sh - The Memory Usage Reporting Script
+################################################################
