@@ -1,7 +1,11 @@
 #!/bin/bash
 
 ################################################################
+# show processes whose effective user ID (-u) is root and select only specific columns (-o)
+#ps -u root -o pid,%cpu,cmd
 
+# sort all processes (--sort) by their CPU usage (from highest to lowest)
+#ps -e -o pid,%cpu,rss,cmd --sort -%cpu
 
 HELP_MESSAGE() {
 printf "\n%5s%s\n\n" "" "## Display memory usage information for all processes"
